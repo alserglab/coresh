@@ -1,0 +1,25 @@
+Package: coresh
+Type: Package
+Title: CORESH: coregulation search engine
+Version: 0.1.0
+Authors@R: c(
+             person("Vladimir", "Sukhov", role = "aut"),
+             person("Aigul", "Nugmanova", role = "aut"),
+			 person("Alexey", "Sergushichev", email = "alsergbox@gmail.com", role = c("aut", "cre")))
+Description: The package implements a simplified pipeline of a CORESH search engine.
+biocViews: GeneExpression
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Imports: 
+    fgsea,
+    qs2,
+    data.table,
+    fastmatch,
+    msigdbr,
+    BiocParallel
+Suggests:
+    knitr, 
+    rmarkdown,
+    BiocStyle
+RoxygenNote: 7.3.2

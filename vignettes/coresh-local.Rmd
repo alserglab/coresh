@@ -1,0 +1,183 @@
+---
+title: "Using CORESH locally"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: false
+vignette: >
+  %\VignetteIndexEntry{Using CORESH locally}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, echo=FALSE}
+
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+
+```
+
+# Introduction
+
+This vignette demonstrates the core algorithm behind CORESH search engine for querying public gene expression datasets based on a user-provided gene signature (https://alserglab.wustl.edu/coresh/). 
+CORESH ranks the datasets based on the level of coregulation of user-provided genes using a score inspired by Principal Component Analysis, which can be applied to any gene expression matrix. Currently, CORESH operates on a compendium of more than 40,000 mouse and 40,000 human gene expression datasets from the GEO database, including datasets from both microarray and RNA-seq profiling.
+
+
+# Installing dependencies
+
+All of the required R dependencies can be installed by installing `coresh` R package:
+
+```{r eval=FALSE}
+library(remotes)
+install_github("alserglab/coresh")
+```
+
+# Getting the data
+
+The preprocessed compendium of GEO datasets can be downloaded from the
+[Synapse project syn66227307](https://www.synapse.org/coresh).
+Notice, that to download the files you will need to register at Synapse first.
+
+After user registration, you can install the official Python client (https://python-docs.synapse.org/en/stable/tutorials/installation/).
+Install the client with `pip` using the command line:
+```{bash eval=FALSE}
+pip install --upgrade synapseclient
+```
+
+Then log in to the client (you can use a personal access token, which can be created at https://accounts.synapse.org/authenticated/personalaccesstokens):
+```{bash eval=FALSE}
+synapse config
+```
+
+Finally, download the files from the project 
+```{bash eval=FALSE}
+synapse get -r syn66227307
+```
+
+If everything finished correctly, a `preprocessed_chunks` folder should appear.
+```{bash}
+tree -n preprocessed_chunks | head
+```
+
+# Running CORESH analysis locally
+
+Now we can switch to R and take a look at the data. In this vignette we will be working
+with the human data.
+
+The data is split into around hundred chunks:
+
+```{r}
+chunkPaths <- list.files("./preprocessed_chunks/hsa/",
+                         pattern="full_objects.qs2",
+                         full.names = TRUE)
+print(length(chunkPaths))
+```
+
+Each chunk consists from around 500 objects and can be loaded using `qs2` packages:
+```{r message=FALSE}
+library(qs2)
+chunk <- qs_read(chunkPaths[[1]])
+print(length(chunk))
+```
+
+Each object corresponds to a GEO dataset. 
+Note that `E1024` attribute contains a processed gene expression matrix: it is centered,
+potentially reduced with a Principal Component Analysis, multiplied by 1024 and rounded to
+the nearest integer. 
+
+```{r}
+str(chunk[[1]])
+```
+
+As a test query gene set we will use "HALLMARK_HYPOXIA" gene set from the MSigDB database:
+```{r}
+library(msigdbr)
+hallmarks <- msigdbr::msigdbr(species="human", collection = "H")
+query <- hallmarks |> 
+    dplyr::filter(gs_name == "HALLMARK_HYPOXIA") |>
+    dplyr::pull(ncbi_gene)
+
+query <- as.integer(query) # gene IDs are stored as integers
+str(query)
+```
+
+Let's define a function to match an object against the query gene set, which will
+rely on `geseca` method from the `fgsea` package:
+```{r message=FALSE}
+library(fgsea)
+library(data.table)
+coreshMatch <- function(obj, query, calculatePvalues=FALSE) {
+    E <- obj$E1024/1024
+    queryIdxs <- na.omit(match(query, obj$rownames))
+    k <- length(queryIdxs)
+        
+    curProfile <- colSums(E[queryIdxs, , drop=FALSE])
+    queryVar <- sum(curProfile**2)
+    
+    if (calculatePvalues) {
+        gesecaPval <- fgsea:::gesecaCpp(E, queryVar, k, sampleSize=21, seed=1, eps = 1e-300)[[1]]$pval
+    } else {
+        gesecaPval <- NA
+    }
+    
+    res <- data.table(
+        gse=obj$gseId,
+        gpl=obj$gplId,
+        pctVar=queryVar / k / obj$totalVar * 100,
+        pval=gesecaPval,
+        size=k
+    )
+    return(res)
+}
+```
+
+Testing on the first dataset:
+```{r}
+coreshMatch(chunk[[1]], query, calculatePvalues = TRUE)
+
+```
+
+Before running it on the whole compendium, set up the parallel back-end appropriate to your machine. 
+The settings could be different from the ones below.
+
+```{r eval=FALSE}
+library(BiocParallel)
+bpparam <- BiocParallel::MulticoreParam(8, progressbar = TRUE) 
+```
+
+```{r echo=FALSE}
+library(BiocParallel)
+# progressbar looks bad in markdown
+bpparam <- BiocParallel::MulticoreParam(8, progressbar = FALSE) 
+```
+
+Without P-value calculation, the whole process should take 10-20 seconds, depending on your machine.
+
+```{r}
+varRanking <- rbindlist(bplapply(chunkPaths, function(chunkPath) {
+    chunk <- qs_read(chunkPath)
+    chunkRanking <- rbindlist(lapply(chunk, coreshMatch, query=query))
+    chunkRanking
+}, BPPARAM = bpparam))
+varRanking <- varRanking[order(pctVar, decreasing=TRUE)]
+head(varRanking)
+```
+
+Ranking by p-value usually is a bit more specific, but takes about couple of minutes to calculate. 
+
+```{r}
+pvalRanking <- rbindlist(bplapply(chunkPaths, function(chunkPath) {
+    chunk <- qs_read(chunkPath)
+    chunkRanking <- rbindlist(lapply(chunk, coreshMatch, query=query, calculatePvalue=TRUE))
+    chunkRanking
+}, BPPARAM = bpparam))
+pvalRanking <- pvalRanking[order(pval)]
+head(pvalRanking)
+```
+
+The current compendium snapshot does not provide metadata, but you can get the information from GEO:
+
+```{r}
+geoUrl <- sprintf("https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=%s&targ=self&form=text&view=brief", pvalRanking$gse[1])
+head(readLines(geoUrl), 3)
+```
+
