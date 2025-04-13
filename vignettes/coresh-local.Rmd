@@ -91,7 +91,7 @@ str(chunk[[1]])
 As a test query gene set we will use "HALLMARK_HYPOXIA" gene set from the MSigDB database:
 ```{r}
 library(msigdbr)
-hallmarks <- msigdbr::msigdbr(species="human", collection = "H")
+hallmarks <- msigdbr(species="human", collection = "H")
 query <- hallmarks |> 
     dplyr::filter(gs_name == "HALLMARK_HYPOXIA") |>
     dplyr::pull(ncbi_gene)
@@ -181,3 +181,8 @@ geoUrl <- sprintf("https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=%s&targ=se
 head(readLines(geoUrl), 3)
 ```
 
+# Session info
+
+```{r}
+sessionInfo()
+```
