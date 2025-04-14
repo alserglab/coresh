@@ -16,7 +16,7 @@ Imports:
     qs2,
     data.table,
     fastmatch,
-    msigdbr (>= 10),
+    msigdbr (>= 10.0),
     dplyr,
     BiocParallel
 Suggests:
